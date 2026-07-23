@@ -938,6 +938,7 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
           <div class="form-field">
             <label for="qEmail">Seu e-mail <span class="req">*</span></label>
             <input type="email" id="qEmail" name="email" required autocomplete="email" placeholder="voce@empresa.com">
+            <span id="emailHint" class="form-hint" style="margin-top:2px;margin-bottom:0;"></span>
           </div>
 
           <div class="form-field">
@@ -955,6 +956,16 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
           <span id="submitLabel">Enviar solicitação</span>
         </button>
       </form>
+    </div>
+
+    <div id="confirmView" style="display:none;">
+      <h3>Confirme seus dados</h3>
+      <p class="modal-sub">Revise as informações antes de enviar — assim garantimos que a resposta chegue certinho até você.</p>
+      <div id="confirmSummary" style="background:var(--bg-1);border:1px solid var(--border-strong);border-radius:12px;padding:18px 20px;margin-bottom:22px;font-size:14px;line-height:1.9;"></div>
+      <div style="display:flex;gap:12px;">
+        <button type="button" class="btn btn-ghost" id="confirmBack" style="flex:1;justify-content:center;">Corrigir dados</button>
+        <button type="button" class="btn btn-primary" id="confirmSend" style="flex:1;justify-content:center;">Confirmar e enviar</button>
+      </div>
     </div>
 
     <div id="successView" class="success-view" style="display:none;">
@@ -1055,9 +1066,7 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
 
   // ============ QUOTE MODAL ============
   // O envio real de e-mail usa um backend próprio (Node.js + Gmail SMTP)
-  // hospedado gratuitamente na Vercel. Troque a URL abaixo pela URL do seu
-  // projeto assim que fizer o deploy do repositório "l7-backend":
-  // Ex: 'https://l7-backend-seuusuario.vercel.app/api/send-email'
+  // hospedado gratuitamente na Vercel.
   var BACKEND_URL = 'https://l7-backend.vercel.app/api/send-email';
   var OWNER_EMAIL = 'l7systemsenterprise@gmail.com';
 
@@ -1065,18 +1074,26 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
   var modalClose = document.getElementById('modalClose');
   var successClose = document.getElementById('successClose');
   var formView = document.getElementById('formView');
+  var confirmView = document.getElementById('confirmView');
+  var confirmSummary = document.getElementById('confirmSummary');
+  var confirmBack = document.getElementById('confirmBack');
+  var confirmSend = document.getElementById('confirmSend');
   var successView = document.getElementById('successView');
   var quoteForm = document.getElementById('quoteForm');
   var formStatus = document.getElementById('formStatus');
   var submitBtn = document.getElementById('formSubmitBtn');
   var submitLabel = document.getElementById('submitLabel');
+  var qEmail = document.getElementById('qEmail');
+  var emailHint = document.getElementById('emailHint');
   var lastFocused = null;
+  var pendingData = null;
 
   function openModal(){
     lastFocused = document.activeElement;
     overlay.classList.add('open');
     document.body.style.overflow = 'hidden';
     formView.style.display = '';
+    confirmView.style.display = 'none';
     successView.style.display = 'none';
     formStatus.innerHTML = '';
     setTimeout(function(){ document.getElementById('qCompany').focus(); }, 250);
@@ -1102,6 +1119,12 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
       '<span>' + msg + '</span></div>';
   }
 
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+
   function buildMailto(data){
     var subject = 'Orçamento — ' + data.titulo + ' (' + data.empresa + ')';
     var body = 'Empresa: ' + data.empresa + '\n' +
@@ -1113,6 +1136,54 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
     return 'mailto:' + OWNER_EMAIL + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
   }
 
+  // ---- Checagem gratuita de domínio de e-mail (consulta DNS pública, sem limite) ----
+  var emailCheckCache = {};
+  function applyEmailHint(ok){
+    if(ok === null){
+      emailHint.textContent = '';
+      return;
+    }
+    if(ok){
+      emailHint.textContent = '✓ Domínio de e-mail válido';
+      emailHint.style.color = 'var(--cyan)';
+    } else {
+      emailHint.textContent = 'Não encontramos servidor de e-mail para esse domínio — confira se digitou certo.';
+      emailHint.style.color = '#F87171';
+    }
+  }
+  function checkEmailDomain(){
+    var val = qEmail.value.trim();
+    var atIndex = val.indexOf('@');
+    if(atIndex === -1 || atIndex === val.length - 1){ emailHint.textContent = ''; return; }
+    var domain = val.slice(atIndex + 1).toLowerCase();
+    if(!domain || domain.indexOf('.') === -1){ emailHint.textContent = ''; return; }
+
+    if(emailCheckCache.hasOwnProperty(domain)){
+      applyEmailHint(emailCheckCache[domain]);
+      return;
+    }
+    emailHint.textContent = 'Verificando domínio...';
+    emailHint.style.color = 'var(--muted-2)';
+    fetch('https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=MX', {
+      headers: { 'Accept': 'application/dns-json' }
+    })
+    .then(function(res){ return res.json(); })
+    .then(function(json){
+      var ok = json.Status === 0 && Array.isArray(json.Answer) && json.Answer.length > 0;
+      emailCheckCache[domain] = ok;
+      // Evita mostrar resultado desatualizado se a pessoa já mudou o campo
+      if(qEmail.value.trim().toLowerCase().endsWith('@' + domain)){
+        applyEmailHint(ok);
+      }
+    })
+    .catch(function(){
+      // Falha na checagem (ex: sem internet) nunca bloqueia o usuário
+      emailHint.textContent = '';
+    });
+  }
+  qEmail.addEventListener('blur', checkEmailDomain);
+
+  // ---- Etapa 1: valida o formulário e mostra a tela de confirmação ----
   quoteForm.addEventListener('submit', function(e){
     e.preventDefault();
     if(!quoteForm.checkValidity()){
@@ -1120,7 +1191,7 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
       return;
     }
 
-    var data = {
+    pendingData = {
       empresa: document.getElementById('qCompany').value.trim(),
       servico: document.getElementById('qService').value,
       titulo: document.getElementById('qTitle').value.trim(),
@@ -1129,16 +1200,43 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
       mensagem: document.getElementById('qMessage').value.trim()
     };
 
-    submitBtn.disabled = true;
-    submitLabel.textContent = 'Enviando...';
-    formStatus.innerHTML = '';
+    confirmSummary.innerHTML =
+      '<strong>Empresa:</strong> ' + escapeHtml(pendingData.empresa) + '<br>' +
+      '<strong>Serviço:</strong> ' + escapeHtml(pendingData.servico) + '<br>' +
+      '<strong>Título:</strong> ' + escapeHtml(pendingData.titulo) + '<br>' +
+      '<strong>E-mail:</strong> ' + escapeHtml(pendingData.email) + '<br>' +
+      '<strong>Contato adicional:</strong> ' + escapeHtml(pendingData.contato_adicional || 'não informado') + '<br>' +
+      '<strong>Mensagem:</strong> ' + escapeHtml(pendingData.mensagem);
+
+    formView.style.display = 'none';
+    confirmView.style.display = '';
+  });
+
+  // ---- Voltar para corrigir dados ----
+  confirmBack.addEventListener('click', function(){
+    confirmView.style.display = 'none';
+    formView.style.display = '';
+  });
+
+  // ---- Etapa 2: confirmação final e envio real ----
+  confirmSend.addEventListener('click', function(){
+    if(!pendingData) return;
+    var data = pendingData;
+
+    confirmSend.disabled = true;
+    confirmBack.disabled = true;
+    confirmSend.textContent = 'Enviando...';
+
+    function resetButtons(){
+      confirmSend.disabled = false;
+      confirmBack.disabled = false;
+      confirmSend.textContent = 'Confirmar e enviar';
+    }
 
     if(BACKEND_URL.indexOf('SUA_URL_DA_VERCEL_AQUI') !== -1){
-      // Backend ainda não configurado: usa o cliente de e-mail do visitante como alternativa funcional.
       window.location.href = buildMailto(data);
-      submitBtn.disabled = false;
-      submitLabel.textContent = 'Enviar solicitação';
-      formView.style.display = 'none';
+      resetButtons();
+      confirmView.style.display = 'none';
       successView.style.display = '';
       return;
     }
@@ -1150,20 +1248,23 @@ html[data-theme="light"] .modal-overlay{background:rgba(15,23,42,0.45);}
     })
     .then(function(res){ return res.json(); })
     .then(function(result){
-      submitBtn.disabled = false;
-      submitLabel.textContent = 'Enviar solicitação';
+      resetButtons();
       if(result.success){
         quoteForm.reset();
-        formView.style.display = 'none';
+        emailHint.textContent = '';
+        confirmView.style.display = 'none';
         successView.style.display = '';
       } else {
+        confirmView.style.display = 'none';
+        formView.style.display = '';
         showStatus('error', 'Não foi possível enviar automaticamente. Vamos abrir seu e-mail para concluir o envio.');
         setTimeout(function(){ window.location.href = buildMailto(data); }, 1200);
       }
     })
     .catch(function(){
-      submitBtn.disabled = false;
-      submitLabel.textContent = 'Enviar solicitação';
+      resetButtons();
+      confirmView.style.display = 'none';
+      formView.style.display = '';
       showStatus('error', 'Sem conexão com o servidor de envio. Vamos abrir seu e-mail para concluir o envio.');
       setTimeout(function(){ window.location.href = buildMailto(data); }, 1200);
     });
